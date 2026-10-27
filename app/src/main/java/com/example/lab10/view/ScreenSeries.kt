@@ -1,5 +1,7 @@
-package com.tecsup.lab10.view
+package com.example.lab10.view
 
+import android.content.Context
+import androidx.compose.ui.platform.LocalContext
 import android.util.Log
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,11 +20,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
@@ -31,17 +32,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
-import com.tecsup.lab10.data.SerieApiService
-import com.tecsup.lab10.data.SerieModel
-import kotlinx.coroutines.launch
+import com.example.lab10.data.SerieApiService
+import com.example.lab10.data.SerieModel
+import kotlinx.coroutines.delay
 
 @Composable
 fun ContenidoSeriesListado(navController: NavHostController, servicio: SerieApiService) {
     var listaSeries: SnapshotStateList<SerieModel> = remember { mutableStateListOf() }
 
     LaunchedEffect(Unit) {
-        val listado = servicio.selectSeries()
-        listado.forEach { listaSeries.add(it) }
+        try {
+            val listado = servicio.selectSeries()
+            listaSeries.clear()
+            listado.forEach { listaSeries.add(it) }
+        } catch (e: Exception) {
+            Log.e("SERIE-LISTA", "Falla de conexión: ${e.message}")
+        }
     }
 
     LazyColumn {
@@ -85,22 +91,47 @@ fun ContenidoSeriesListado(navController: NavHostController, servicio: SerieApiS
         }
     }
 }
-@Composable
-fun ContenidoSerieEditar(navController: NavHostController, servicio: SerieApiService, pid: Int = 0) {
-    val id = pid
-    var name by remember { mutableStateOf("") }
-    var release_date by remember { mutableStateOf("") }
-    var rating by remember { mutableStateOf("") }
-    var category by remember { mutableStateOf("") }
-    val scope = rememberCoroutineScope()
 
-    if (id != 0) {
+@Composable
+fun ContenidoSerieEditar(
+    navController: NavHostController,
+    servicio: SerieApiService,
+    pid: Int = 0
+) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("series_prefs", Context.MODE_PRIVATE) }
+    val esNuevo = pid == 0
+
+    var id by remember { mutableStateOf(pid) }
+    var name by remember { mutableStateOf<String?>("") }
+    var release_date by remember { mutableStateOf<String?>("") }
+    var rating by remember { mutableStateOf<String?>("") }
+    var category by remember { mutableStateOf<String?>("") }
+    var grabar by remember { mutableStateOf(false) }
+
+    if (esNuevo) {
         LaunchedEffect(Unit) {
-            val objSerie = servicio.selectSerie(id.toString())
-            name = objSerie.body()?.name ?: ""
-            release_date = objSerie.body()?.release_date ?: ""
-            rating = objSerie.body()?.rating?.toString() ?: ""
-            category = objSerie.body()?.category ?: ""
+            try {
+                val maxServidor = servicio.selectSeries().maxOfOrNull { it.id } ?: 0
+                val ultimoUsado = prefs.getInt("ultimo_id", 0)
+                id = maxOf(maxServidor, ultimoUsado) + 1
+            } catch (e: Exception) {
+                Log.e("SERIE-ID", "Falla al calcular id: ${e.message}")
+            }
+        }
+    } else {
+        // Serie existente: cargar sus datos
+        LaunchedEffect(Unit) {
+            try {
+                val objSerie = servicio.selectSerie(id.toString())
+                delay(100)
+                name = objSerie.body()?.name
+                release_date = objSerie.body()?.release_date
+                rating = objSerie.body()?.rating.toString()
+                category = objSerie.body()?.category
+            } catch (e: Exception) {
+                Log.e("SERIE-CARGAR", "Falla: ${e.message}")
+            }
         }
     }
 
@@ -112,33 +143,79 @@ fun ContenidoSerieEditar(navController: NavHostController, servicio: SerieApiSer
         TextField(
             value = id.toString(),
             onValueChange = { },
-            label = { Text("ID (solo lectura)") },
+            label = { Text("ID (automático)") },
             readOnly = true,
             singleLine = true
         )
-        TextField(value = name, onValueChange = { name = it }, label = { Text("Name: ") }, singleLine = true)
-        TextField(value = release_date, onValueChange = { release_date = it }, label = { Text("Release Date:") }, singleLine = true)
-        TextField(value = rating, onValueChange = { rating = it }, label = { Text("Rating:") }, singleLine = true)
-        TextField(value = category, onValueChange = { category = it }, label = { Text("Category:") }, singleLine = true)
-
+        TextField(
+            value = name ?: "",
+            onValueChange = { name = it },
+            label = { Text("Name: ") },
+            singleLine = true
+        )
+        TextField(
+            value = release_date ?: "",
+            onValueChange = { release_date = it },
+            label = { Text("Release Date:") },
+            singleLine = true
+        )
+        TextField(
+            value = rating ?: "",
+            onValueChange = { rating = it },
+            label = { Text("Rating:") },
+            singleLine = true
+        )
+        TextField(
+            value = category ?: "",
+            onValueChange = { category = it },
+            label = { Text("Category:") },
+            singleLine = true
+        )
         Button(
-            onClick = {
-                scope.launch {
-                    val objSerie = SerieModel(id, name, release_date, rating.toIntOrNull() ?: 0, category)
-                    if (id == 0)
-                        servicio.insertSerie(objSerie)
-                    else
-                        servicio.updateSerie(id.toString(), objSerie)
-                    navController.navigate("series")
-                }
-            }
+            enabled = !esNuevo || id != 0,
+            onClick = { grabar = true }
         ) {
             Text("Grabar", fontSize = 16.sp)
         }
     }
+
+    if (grabar) {
+        LaunchedEffect(Unit) {
+            try {
+                val objSerie = SerieModel(
+                    id,
+                    name ?: "",
+                    release_date ?: "",
+                    rating?.toIntOrNull() ?: 0,
+                    category ?: ""
+                )
+                val respuesta = if (esNuevo)
+                    servicio.insertSerie(objSerie)
+                else
+                    servicio.updateSerie(id.toString(), objSerie)
+
+                Log.e(
+                    "SERIE-GRABAR",
+                    "Código: ${respuesta.code()} Error: ${respuesta.errorBody()?.string()}"
+                )
+
+                if (respuesta.isSuccessful) {
+                    if (esNuevo) prefs.edit().putInt("ultimo_id", id).apply()
+                    navController.navigate("series")
+                }
+            } catch (e: Exception) {
+                Log.e("SERIE-GRABAR", "Falla: ${e.message}")
+            }
+            grabar = false
+        }
+    }
 }
 @Composable
-fun ContenidoSerieEliminar(navController: NavHostController, servicio: SerieApiService, id: Int) {
+fun ContenidoSerieEliminar(
+    navController: NavHostController,
+    servicio: SerieApiService,
+    id: Int
+) {
     var showDialog by remember { mutableStateOf(true) }
     var borrar by remember { mutableStateOf(false) }
 
@@ -146,23 +223,27 @@ fun ContenidoSerieEliminar(navController: NavHostController, servicio: SerieApiS
         AlertDialog(
             onDismissRequest = {
                 showDialog = false
-                navController.popBackStack()
+                navController.navigate("series")
             },
             title = { Text(text = "Confirmar Eliminación") },
             text = { Text("¿Está seguro de eliminar la Serie?") },
             confirmButton = {
-                Button(onClick = {
-                    showDialog = false
-                    borrar = true
-                }) {
+                Button(
+                    onClick = {
+                        showDialog = false
+                        borrar = true
+                    }
+                ) {
                     Text("Aceptar")
                 }
             },
             dismissButton = {
-                Button(onClick = {
-                    showDialog = false
-                    navController.navigate("series")
-                }) {
+                Button(
+                    onClick = {
+                        showDialog = false
+                        navController.navigate("series")
+                    }
+                ) {
                     Text("Cancelar")
                 }
             }
